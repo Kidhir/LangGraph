@@ -1,26 +1,36 @@
+import os
 import requests
-import random
 from langgraph.graph import StateGraph
 
+HF_API_KEY = os.getenv("HF_API_KEY")  # Secret stored in Streamlit Cloud
 
-def generate_insight(state):
+def get_coordinates(location):
+    """Geocode location using Nominatim (OpenStreetMap)"""
+    url = "https://nominatim.openstreetmap.org/search"
+    params = {"q": location, "format": "json", "limit": 1}
+    headers = {"User-Agent": "CompetitorAnalyzerApp"}
+
+    response = requests.get(url, params=params, headers=headers)
+    data = response.json()
+
+    if not data:
+        return None
+
+    lat = float(data[0]["lat"])
+    lon = float(data[0]["lon"])
+    return lat, lon
+
+
+def find_nearby_stores(state):
     location = state.get("location", "Koramangala, Bangalore")
+    coords = get_coordinates(location)
 
-    # Step 1: Geocode using Nominatim (OpenStreetMap)
-    geo_url = "https://nominatim.openstreetmap.org/search"
-    geo_params = {"q": location, "format": "json", "limit": 1}
-    try:
-        geo_res = requests.get(geo_url, params=geo_params, headers={"User-Agent": "LangGraphApp"}).json()
-    except Exception as e:
-        return {"response": f"Geocoding error: {e}"}
+    if not coords:
+        return {"response": f"Could not find coordinates for {location}"}
 
-    if not geo_res:
-        return {"response": f"Could not find the location: {location}"}
+    lat, lon = coords
 
-    lat, lon = float(geo_res[0]['lat']), float(geo_res[0]['lon'])
-
-    # Step 2: Overpass API to find nearby clothing stores
-    overpass_url = "https://overpass-api.de/api/interpreter"
+    overpass_url = "http://overpass-api.de/api/interpreter"
     query = f"""
     [out:json];
     (
@@ -30,72 +40,72 @@ def generate_insight(state):
     );
     out center;
     """
-    try:
-        res = requests.get(overpass_url, params={"data": query}, timeout=30)
-        if res.status_code != 200:
-            return {"response": f"Overpass API error: {res.status_code}"}
-        data = res.json()
-    except Exception as e:
-        return {"response": f"Overpass error: {e}"}
 
-    store_names = [el["tags"]["name"] for el in data.get("elements", []) if "tags" in el and "name" in el["tags"]][:5]
+    response = requests.post(overpass_url, data=query)
+    data = response.json()
 
-    # Step 3: Simulate footfall/peak hours
-    mock_hours = ["11AM–2PM", "2PM–5PM", "5PM–8PM", "6PM–9PM", "Weekend Only"]
-    store_peak_hours = {store: random.choice(mock_hours) for store in store_names}
+    store_names = []
+    peak_hours = {}
 
-    # Step 4: Response summary
-    response = f"📍 Competitor insights for {location}:\n\n👕 Clothing Stores Nearby:\n"
-    response += "\n".join([f"• {store}" for store in store_names]) or "• None found"
-    response += "\n\n⏰ Estimated Peak Hours:\n"
-    response += "\n".join([f"• {store}: {store_peak_hours[store]}" for store in store_peak_hours])
+    for element in data["elements"]:
+        tags = element.get("tags", {})
+        name = tags.get("name")
+        if name:
+            store_names.append(name)
+            peak_hours[name] = "5PM - 9PM"  # Mocked, can improve later
+        if len(store_names) >= 5:
+            break
 
     return {
-        "response": response,
-        "location": location,
         "store_names": store_names,
-        "store_peak_hours": store_peak_hours,
+        "store_peak_hours": peak_hours,
+        "location": location
     }
 
 
 def generate_strategy(state):
     store_names = state.get("store_names", [])
-    store_peak_hours = state.get("store_peak_hours", {})
+    peak_hours = state.get("store_peak_hours", {})
     location = state.get("location", "")
 
     prompt = f"""
-You are a retail business strategist.
-
 A new clothing store wants to open in {location}.
 Nearby competitors include: {store_names}
-Their estimated peak hours are: {store_peak_hours}
+Their estimated peak hours are: {peak_hours}
 
 Suggest 3 smart strategies for the new store to succeed in this area.
 """
 
+    headers = {
+        "Authorization": f"Bearer {HF_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
     try:
         response = requests.post(
-            "http://localhost:11434/api/generate",
-            json={
-                "model": "mistral",  # You can also try llama3, gemma, etc.
-                "prompt": prompt,
-                "stream": False
-            }
+            "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1",
+            headers=headers,
+            json={"inputs": prompt}
         )
         result = response.json()
-        return {"strategy": result.get("response", "No strategy generated.")}
+
+        if isinstance(result, list):
+            return {"strategy": result[0].get("generated_text", "").strip()}
+        elif "generated_text" in result:
+            return {"strategy": result["generated_text"].strip()}
+        else:
+            return {"strategy": str(result)}
+
     except Exception as e:
-        return {"strategy": f"Error calling local LLM: {e}"}
+        return {"strategy": f"⚠️ Error calling Hugging Face API: {e}"}
 
 
-# Build LangGraph pipeline
+# Define the LangGraph pipeline
 builder = StateGraph(input="location", output="strategy")
-
-builder.add_node("insight_generator", generate_insight)
+builder.add_node("store_finder", find_nearby_stores)
 builder.add_node("strategy_generator", generate_strategy)
 
-builder.set_entry_point("insight_generator")
-builder.add_edge("insight_generator", "strategy_generator")
-builder.set_finish_point("strategy_generator")
+builder.set_entry_point("store_finder")
+builder.add_edge("store_finder", "strategy_generator")
 
 graph = builder.compile()
