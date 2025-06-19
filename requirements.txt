@@ -1,0 +1,6 @@
+streamlit>=1.32.0
+requests>=2.31.0
+langgraph>=0.0.32
+langchain>=0.1.16
+ollama>=0.1.7
+python-dotenv>=1.0.1
