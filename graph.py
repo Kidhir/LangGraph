@@ -1,11 +1,12 @@
-import os
 import requests
+import streamlit as st
 from langgraph.graph import StateGraph
 
-HF_API_KEY = os.getenv("HF_API_KEY")  # Secret stored in Streamlit Cloud
+# ✅ Get API key securely from Streamlit Secrets
+HF_API_KEY = st.secrets["HF_API_KEY"]
 
 def get_coordinates(location):
-    """Geocode location using Nominatim (OpenStreetMap)"""
+    """Geocode location using OpenStreetMap's Nominatim API"""
     url = "https://nominatim.openstreetmap.org/search"
     params = {"q": location, "format": "json", "limit": 1}
     headers = {"User-Agent": "CompetitorAnalyzerApp"}
@@ -52,7 +53,7 @@ def find_nearby_stores(state):
         name = tags.get("name")
         if name:
             store_names.append(name)
-            peak_hours[name] = "5PM - 9PM"  # Mocked, can improve later
+            peak_hours[name] = "5PM - 9PM"  # Simulated peak hours
         if len(store_names) >= 5:
             break
 
@@ -89,18 +90,18 @@ Suggest 3 smart strategies for the new store to succeed in this area.
         )
         result = response.json()
 
-        if isinstance(result, list):
-            return {"strategy": result[0].get("generated_text", "").strip()}
+        if isinstance(result, list) and "generated_text" in result[0]:
+            return {"strategy": result[0]["generated_text"].strip()}
         elif "generated_text" in result:
             return {"strategy": result["generated_text"].strip()}
         else:
             return {"strategy": str(result)}
 
     except Exception as e:
-        return {"strategy": f"⚠️ Error calling Hugging Face API: {e}"}
+        return {"strategy": f"Error calling Hugging Face API: {e}"}
 
 
-# Define the LangGraph pipeline
+# ✅ Define LangGraph pipeline
 builder = StateGraph(input="location", output="strategy")
 builder.add_node("store_finder", find_nearby_stores)
 builder.add_node("strategy_generator", generate_strategy)
